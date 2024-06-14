@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"three-go/camera"
+	"three-go/math/matrix"
 	"three-go/math/vector"
 	"three-go/objects"
 
@@ -16,18 +17,46 @@ import (
 const (
 	screenWidth  = 800
 	screenHeight = 600
+	moveSpeed    = 0.1
+	rotateSpeed  = 0.05
 )
 
 type Game struct {
-	camera *camera.Camera
-	cube   *objects.Object3D
+	camera       *camera.Camera
+	triangleMesh *objects.TriangleMesh
 }
 
 func (g *Game) Update() error {
+	// Handle camera movement
+	if ebiten.IsKeyPressed(ebiten.KeyW) {
+		g.camera.MoveForward(moveSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyS) {
+		g.camera.MoveBackward(moveSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyA) {
+		g.camera.MoveLeft(moveSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyD) {
+		g.camera.MoveRight(moveSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyQ) {
+		g.camera.MoveUp(moveSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyE) {
+		g.camera.MoveDown(moveSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
+		g.camera.RotateY(-rotateSpeed)
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyRight) {
+		g.camera.RotateY(rotateSpeed)
+	}
+
 	// Update game logic here
-	g.cube.Rotation.Y += 0.01
-	if g.cube.Rotation.Y > 2*math.Pi {
-		g.cube.Rotation.Y -= 2 * math.Pi
+	g.triangleMesh.Rotation.Y += 0.01
+	if g.triangleMesh.Rotation.Y > 2*math.Pi {
+		g.triangleMesh.Rotation.Y -= 2 * math.Pi
 	}
 	return nil
 }
@@ -36,39 +65,31 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	// Clear screen with a background color
 	screen.Fill(color.RGBA{0, 0, 0, 255})
 
-	// Draw the cube edges
-	edges := [][2]int{
-		{0, 1}, {1, 2}, {2, 3}, {3, 0},
-		{4, 5}, {5, 6}, {6, 7}, {7, 4},
-		{0, 4}, {1, 5}, {2, 6}, {3, 7},
-	}
+	// Draw the triangle mesh
+	for _, triangle := range g.triangleMesh.Triangles {
+		var projectedVertices [3]vector.Vector3
+		for i, vertex := range triangle.Vertices {
+			// Apply rotation
+			rotated := rotateVertex(vertex, g.triangleMesh.Rotation)
 
-	for _, edge := range edges {
-		start := g.cube.Vertices[edge[0]]
-		end := g.cube.Vertices[edge[1]]
+			// Apply translation
+			translated := vector.Vector3{
+				X: rotated.X + g.triangleMesh.Position.X,
+				Y: rotated.Y + g.triangleMesh.Position.Y,
+				Z: rotated.Z + g.triangleMesh.Position.Z,
+			}
 
-		// Apply rotation
-		rotatedStart := rotateVertex(start, g.cube.Rotation)
-		rotatedEnd := rotateVertex(end, g.cube.Rotation)
+			// Project 3D point to 2D space
+			x, y := project(translated, g.camera)
 
-		// Apply translation
-		translatedStart := vector.Vector3{
-			X: rotatedStart.X + g.cube.Position.X,
-			Y: rotatedStart.Y + g.cube.Position.Y,
-			Z: rotatedStart.Z + g.cube.Position.Z,
-		}
-		translatedEnd := vector.Vector3{
-			X: rotatedEnd.X + g.cube.Position.X,
-			Y: rotatedEnd.Y + g.cube.Position.Y,
-			Z: rotatedEnd.Z + g.cube.Position.Z,
+			// Store the projected vertices
+			projectedVertices[i] = vector.Vector3{X: x, Y: y, Z: 0}
 		}
 
-		// Project 3D points to 2D space
-		x1, y1 := project(translatedStart, g.camera)
-		x2, y2 := project(translatedEnd, g.camera)
-
-		// Draw the edge
-		ebitenutil.DrawLine(screen, x1, y1, x2, y2, color.White)
+		// Draw the triangle
+		ebitenutil.DrawLine(screen, projectedVertices[0].X, projectedVertices[0].Y, projectedVertices[1].X, projectedVertices[1].Y, triangle.Color)
+		ebitenutil.DrawLine(screen, projectedVertices[1].X, projectedVertices[1].Y, projectedVertices[2].X, projectedVertices[2].Y, triangle.Color)
+		ebitenutil.DrawLine(screen, projectedVertices[2].X, projectedVertices[2].Y, projectedVertices[0].X, projectedVertices[0].Y, triangle.Color)
 	}
 
 	// Draw some text for demonstration
@@ -76,18 +97,20 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func rotateVertex(v, rotation vector.Vector3) vector.Vector3 {
-	// Rotate around Y axis for simplicity
-	sinY, cosY := math.Sincos(rotation.Y)
+	rotX := matrix.RotationX(rotation.X)
+	rotY := matrix.RotationY(rotation.Y)
+	rotZ := matrix.RotationZ(rotation.Z)
 
-	x := v.X*cosY - v.Z*sinY
-	z := v.X*sinY + v.Z*cosY
+	v = matrix.MultiplyVector(rotX, v)
+	v = matrix.MultiplyVector(rotY, v)
+	v = matrix.MultiplyVector(rotZ, v)
 
-	return vector.Vector3{X: x, Y: v.Y, Z: z}
+	return v
 }
 
 func project(v vector.Vector3, cam *camera.Camera) (float64, float64) {
 	// Simple perspective projection
-	fov := 1.0 / math.Tan(90.0/2.0)
+	fov := 1.0 / math.Tan(math.Pi/4) // 45 degree field of view
 	aspect := float64(screenWidth) / float64(screenHeight)
 	z := v.Z - cam.Position.Z
 	x := (v.X - cam.Position.X) * fov / z * aspect
@@ -105,14 +128,14 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func main() {
-	// Initialize camera and cube
+	// Initialize camera and triangle mesh
 	cam := camera.NewCamera()
 	cam.Position.Z = 5
-	cube := objects.NewCube(2)
+	triangleMesh := objects.NewColoredTriangleMesh()
 
 	game := &Game{
-		camera: cam,
-		cube:   cube,
+		camera:       cam,
+		triangleMesh: triangleMesh,
 	}
 
 	// Run the Ebiten game loop
